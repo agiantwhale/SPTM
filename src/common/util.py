@@ -4,6 +4,9 @@ import cv2
 import numpy as np
 import h5py
 from vizdoom import *
+import deepmind_lab as dl
+import deepmind_lab_gym as dlg
+import multiprocdmlab as mpdmlab
 import math
 import os
 import os.path
@@ -18,22 +21,28 @@ import cv2
 import os
 import cPickle
 import numpy as np
+
 np.random.seed(DEFAULT_RANDOM_SEED)
 import keras
 import random
+
 random.seed(DEFAULT_RANDOM_SEED)
+
 
 def mean(numbers):
   return float(sum(numbers)) / max(len(numbers), 1)
+
 
 def wait_idle(game, wait_idle_tics=WAIT_IDLE_TICS):
   if wait_idle_tics > 0:
     game.make_action(STAY_IDLE, wait_idle_tics)
 
+
 def game_make_action_wrapper(game, action, repeat):
   game.make_action(action, repeat)
   wait_idle(game)
   return None
+
 
 def save_list_of_arrays_to_hdf5(input, prefix):
   stacked = np.array(input)
@@ -41,11 +50,13 @@ def save_list_of_arrays_to_hdf5(input, prefix):
   h5f.create_dataset('dataset', data=stacked)
   h5f.close()
 
+
 def load_array_from_hdf5(prefix):
-  h5f = h5py.File(prefix + HDF5_NAME,'r')
+  h5f = h5py.File(prefix + HDF5_NAME, 'r')
   data = h5f['dataset'][:]
   h5f.close()
   return data
+
 
 class StateRecorder():
   def __init__(self, game):
@@ -59,6 +70,7 @@ class StateRecorder():
     self.screen_buffers.append(state.screen_buffer.transpose(VIZDOOM_TO_TF))
 
   '''records current state, then makes the provided action'''
+
   def record(self, action_index, repeat):
     state = self.game.get_state()
     self.record_buffers(state)
@@ -75,22 +87,27 @@ class StateRecorder():
     data = (self.game_variables,
             self.actions,
             self.rewards)
-    with open(NAVIGATION_RECORDING_PATH, 'wb') as output_file:  
+    with open(NAVIGATION_RECORDING_PATH, 'wb') as output_file:
       cPickle.dump(data, output_file)
+
 
 def downsample(input, factor):
   for _ in xrange(factor):
     input = cv2.pyrDown(input)
   return input
 
+
 def double_downsampling(input):
   return cv2.pyrDown(cv2.pyrDown(input))
+
 
 def double_upsampling(input):
   return cv2.pyrUp(cv2.pyrUp(input))
 
+
 def color2gray(input):
   return cv2.cvtColor(input, cv2.COLOR_RGB2GRAY)
+
 
 def doom_navigation_setup(seed, wad):
   game = DoomGame()
@@ -100,13 +117,56 @@ def doom_navigation_setup(seed, wad):
   game.init()
   return game
 
+
+def get_entity_layer_path(entity_layer_name):
+  global DEEPMIND_RUNFILES_PATH, DEEPMIND_SOURCE_PATH
+  mode, size, num = entity_layer_name.split('-')
+  path_format = '{}/assets/entityLayers/{}/{}/entityLayers/{}.entityLayer'
+  path = path_format.format(DEEPMIND_SOURCE_PATH, size, mode, num)
+
+  return path
+
+
+def lab_navigation_setup(_, maps):
+  mapstrings = ','.join(open(get_entity_layer_path(m)).read()
+                        for m in maps.split(','))
+
+  params = {
+    'level_script': 'random_mazes',
+    'config': dict(width=84, height=84, fps=30
+                   , rows=9
+                   , cols=9
+                   , mode='training'
+                   , num_maps=1
+                   , withvariations=True
+                   , random_spawn_random_goal='True'
+                   , goal_characters='GAP'
+                   , spawn_characters='GAP'
+                   , chosen_map=maps
+                   , mapnames=maps
+                   , mapstrings=mapstrings
+                   , apple_prob=0.
+                   , episode_length_seconds=5),
+    'action_mapper': dlg.ActionMapperDiscrete,
+    'enable_depth': True,
+    'additional_observation_types': ['GOAL.LOC', 'SPAWN.LOC', 'POSE',
+                                     'GOAL.FOUND']
+  }
+
+  env = dlg.DeepmindLab(**params)
+
+  return env
+
+
 def calculate_distance_angle(start_coordinates, current_coordinates):
   distance = math.sqrt((start_coordinates[0] - current_coordinates[0]) ** 2 +
-                       (start_coordinates[1] - current_coordinates[1]) ** 2 + 
+                       (start_coordinates[1] - current_coordinates[1]) ** 2 +
                        (start_coordinates[2] - current_coordinates[2]) ** 2)
-  abs_angle_difference = math.fabs(start_coordinates[3] - current_coordinates[3])
+  abs_angle_difference = math.fabs(
+    start_coordinates[3] - current_coordinates[3])
   angle = min(abs_angle_difference, 360.0 - abs_angle_difference)
   return distance, angle
+
 
 def generator(x, y, batch_size, max_action_distance):
   while True:
@@ -123,15 +183,19 @@ def generator(x, y, batch_size, max_action_distance):
       y_list.append(current_y)
     yield np.array(x_list), np.array(y_list)
 
+
 def vertically_stack_image_list(input_image_list):
   image_list = []
   for image in input_image_list:
     image_list.append(image)
-    image_list.append(np.zeros([SHOW_BORDER, image.shape[1], SHOW_CHANNELS], dtype=np.uint8))
+    image_list.append(
+      np.zeros([SHOW_BORDER, image.shape[1], SHOW_CHANNELS], dtype=np.uint8))
   return np.concatenate(image_list, axis=0)
+
 
 def save_np_array_as_png(input, path):
   scipy.misc.toimage(input, cmin=0.0, cmax=255.0).save(path)
+
 
 class NavigationVideoWriter():
   def __init__(self, save_path, nonstop=False):
@@ -146,7 +210,8 @@ class NavigationVideoWriter():
       first = double_upsampling(first)
       second = double_upsampling(second)
     return np.concatenate((first,
-                           np.zeros([SHOW_HEIGHT, SHOW_BORDER, SHOW_CHANNELS], dtype=np.uint8),
+                           np.zeros([SHOW_HEIGHT, SHOW_BORDER, SHOW_CHANNELS],
+                                    dtype=np.uint8),
                            second), axis=1)
 
   def write(self, left, right, counter, deep_net_actions):
@@ -168,7 +233,9 @@ class NavigationVideoWriter():
   def close(self):
     self.video_writer.close()
 
-def make_deep_action(current_screen, goal_screen, model, game, repeat, randomized):
+
+def make_deep_action(current_screen, goal_screen, model, game, repeat,
+                     randomized):
   x = np.expand_dims(np.concatenate((current_screen,
                                      goal_screen), axis=2), axis=0)
   action_probabilities = np.squeeze(model.predict(x,
@@ -181,20 +248,25 @@ def make_deep_action(current_screen, goal_screen, model, game, repeat, randomize
   game_make_action_wrapper(game, ACTIONS_LIST[action_index], repeat)
   return action_index, action_probabilities, current_screen
 
+
 def current_make_deep_action(goal_screen, model, game, repeat, randomized):
   state = game.get_state()
   current_screen = state.screen_buffer.transpose(VIZDOOM_TO_TF)
-  return make_deep_action(current_screen, goal_screen, model, game, repeat, randomized)
+  return make_deep_action(current_screen, goal_screen, model, game, repeat,
+                          randomized)
+
 
 def get_deep_prediction(current_screen, goal_screen, model):
   x = np.expand_dims(np.concatenate((current_screen,
                                      goal_screen), axis=2), axis=0)
   return np.squeeze(model.predict(x, batch_size=1))
 
+
 def current_get_deep_prediction(goal_screen, model, game):
   state = game.get_state()
   current_screen = state.screen_buffer.transpose(VIZDOOM_TO_TF)
   return get_deep_prediction(current_screen, goal_screen, model)
+
 
 def explore(game, number_of_actions):
   is_left = random.random() > 0.5
@@ -209,7 +281,7 @@ def explore(game, number_of_actions):
         action_index = INVERSE_ACTION_NAMES_INDEX['TURN_RIGHT']
     game_make_action_wrapper(game, ACTIONS_LIST[action_index], TEST_REPEAT)
 
+
 def get_distance(first_point, second_point):
   return math.sqrt((first_point[0] - second_point[0]) ** 2 +
                    (first_point[1] - second_point[1]) ** 2)
-

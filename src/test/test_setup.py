@@ -10,7 +10,8 @@ import random
 random.seed(TEST_RANDOM_SEED)
 
 def test_setup(wad):
-  game = doom_navigation_setup(TEST_RANDOM_SEED, wad)
+  # game = doom_navigation_setup(TEST_RANDOM_SEED, wad)
+  game = lab_navigation_setup(TEST_RANDOM_SEED, wad)
   wait_idle(game, WAIT_BEFORE_START_TICS)
   return game
 
